@@ -92,8 +92,6 @@ func NewClient(preCtx context.Context, maxNum int64, options ...ClientOption) *C
 		tasks:        tasks, //任务队列
 		threadTokens: threadTokens,
 		dones:        dones,
-
-		runAfterTime: time.NewTimer(0),
 	}
 	if option.TaskDoneCallBack != nil { //任务完成回调
 		pool.tasks2 = chanx.NewClient[*Task](preCtx)
@@ -161,7 +159,11 @@ func (obj *Client) runMain() {
 		defer obj.clearThreadValue(obj.ctx, runVal)
 	}
 	for {
-		obj.runAfterTime.Reset(time.Second * 30)
+		if obj.runAfterTime == nil {
+			obj.runAfterTime = time.NewTimer(time.Second * 30)
+		} else {
+			obj.runAfterTime.Reset(time.Second * 30)
+		}
 		select {
 		case <-obj.ctx2.Done(): //通知线程关闭
 			return
@@ -316,7 +318,9 @@ func (obj *Client) run(task *Task, option any, threadId int64) {
 }
 
 func (obj *Client) Join() error { //等待所有任务完成，并关闭pool
-	defer obj.runAfterTime.Stop()
+	if obj.runAfterTime != nil {
+		defer obj.runAfterTime.Stop()
+	}
 	obj.cnl()
 	if obj.tasks2 != nil {
 		obj.tasks2.Join()
@@ -340,7 +344,9 @@ func (obj *Client) Join() error { //等待所有任务完成，并关闭pool
 }
 
 func (obj *Client) Close() { //告诉所有协程，立即结束任务
-	defer obj.runAfterTime.Stop()
+	if obj.runAfterTime != nil {
+		defer obj.runAfterTime.Stop()
+	}
 	obj.cnl()
 	if obj.tasks2 != nil {
 		obj.tasks2.Close()
