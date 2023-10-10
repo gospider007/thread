@@ -317,13 +317,13 @@ func (obj *Client) run(task *Task, option any, threadId int64) {
 	}
 }
 
-func (obj *Client) Join() error { //等待所有任务完成，并关闭pool
+func (obj *Client) JoinClose() error { //等待所有任务完成，并关闭pool
 	if obj.runAfterTime != nil {
 		defer obj.runAfterTime.Stop()
 	}
 	obj.cnl()
 	if obj.tasks2 != nil {
-		obj.tasks2.Join()
+		obj.tasks2.JoinClose()
 		<-obj.ctx3.Done()
 	}
 	if obj.ThreadSize() <= 0 {
