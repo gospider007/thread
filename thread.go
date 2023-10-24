@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gitee.com/baixudong/chanx"
+	"github.com/gospider007/chanx"
 )
 
 type Client struct {

@@ -1,5 +1,5 @@
 module gitee.com/baixudong/thread
 
-go 1.21.0
+go 1.21.3
 
-require gitee.com/baixudong/chanx v0.0.0-20231010095823-c37e5301c1be
+require github.com/gospider007/chanx v0.0.0-20231024081700-522ff183916d

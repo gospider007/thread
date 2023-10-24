@@ -30,7 +30,7 @@ import (
 	"log"
 	"time"
 
-	"gitee.com/baixudong/thread"
+	"github.com/gospider007/thread"
 )
 func test(ctx context.Context, num int) {
 	log.Printf("第%d个线程池中的第%d个请求开始", thread.GetThreadId(ctx), num)
