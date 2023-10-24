@@ -1,4 +1,4 @@
-module gitee.com/baixudong/thread
+module github.com/gospider007/thread
 
 go 1.21.3
 
