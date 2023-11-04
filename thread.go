@@ -40,12 +40,37 @@ type Task struct {
 	Args     []any                              //传入的参数
 	CallBack func(context.Context, []any) error //回调函数
 	Timeout  time.Duration                      //超时时间
-	Result   []any                              //函数执行的结果
-	Error    error                              //函数错误信息
+	err      error                              //函数错误信息
+	result   []any                              //函数执行的结果
 	ctx      context.Context
 	cnl      context.CancelFunc
+	stat     uint8
 }
 
+func (obj *Task) Result() ([]any, error) {
+	return obj.result, obj.Error()
+}
+
+func (obj *Task) Error() error {
+	if obj.err != nil || obj.stat == 6 {
+		return obj.err
+	}
+	switch obj.stat {
+	case 0:
+		return errors.New("task init error")
+	case 1:
+		return errors.New("task start error")
+	case 2:
+		return errors.New("task ctx error")
+	case 3:
+		return errors.New("task params error")
+	case 4:
+		return errors.New("task func error")
+	case 5:
+		return errors.New("task callback error")
+	}
+	return obj.err
+}
 func (obj *Task) Done() <-chan struct{} {
 	return obj.ctx.Done()
 }
@@ -111,8 +136,8 @@ func (obj *Client) taskCallBackMain() {
 			case <-obj.ctx2.Done(): //接到关闭线程通知
 				return
 			case <-task.Done():
-				if task.Error != nil { //任务报错，线程报错
-					obj.err = task.Error
+				if task.Error() != nil { //任务报错，线程报错
+					obj.err = task.Error()
 					return
 				}
 				if err := obj.taskDoneCallBack(task); err != nil { //任务回调报错，关闭线程
@@ -220,7 +245,7 @@ func (obj *Client) verify(fun any, args []any) error {
 func (obj *Client) Write(task *Task) (*Task, error) {
 	task.ctx, task.cnl = context.WithCancel(obj.ctx2)        //设置任务ctx
 	if err := obj.verify(task.Func, task.Args); err != nil { //验证参数
-		task.Error = err
+		task.err = err
 		task.cnl()
 		return task, err
 	}
@@ -228,20 +253,20 @@ func (obj *Client) Write(task *Task) (*Task, error) {
 		select {
 		case <-obj.ctx2.Done(): //接到线程关闭通知
 			if obj.Err() != nil {
-				task.Error = obj.Err()
+				task.err = obj.Err()
 			} else {
-				task.Error = ErrPoolClosed
+				task.err = ErrPoolClosed
 			}
 			task.cnl()
-			return task, task.Error
+			return task, task.Error()
 		case <-obj.ctx.Done(): //接到线程关闭通知
 			if obj.Err() != nil {
-				task.Error = obj.Err()
+				task.err = obj.Err()
 			} else {
-				task.Error = ErrPoolClosed
+				task.err = ErrPoolClosed
 			}
 			task.cnl()
-			return task, task.Error
+			return task, task.Error()
 		case obj.tasks <- task:
 			if obj.tasks2 != nil {
 				if err := obj.tasks2.Add(task); err != nil {
@@ -277,29 +302,35 @@ func (obj *Client) run(task *Task, option any, threadId int64) {
 	defer task.cnl() //函数结束，任务完成
 	defer func() {
 		if r := recover(); r != nil {
-			task.Error = fmt.Errorf("%v", r)
+			task.err = fmt.Errorf("%v", r)
 			if obj.debug {
 				debug.PrintStack()
 			}
 		}
 	}()
+	task.stat = 1
+	//start
 	index := 1
 	if obj.createThreadValue != nil {
 		if option == nil {
-			task.Error = errors.New("thread value is nil")
+			task.err = errors.New("thread value is nil")
 			return
 		}
 		if reflect.TypeOf(option).String() != reflect.TypeOf(task.Func).In(1).String() {
-			task.Error = fmt.Errorf("第二个参数类型不对: %T", option)
+			task.err = fmt.Errorf("第二个参数类型不对: %T", option)
 			return
 		}
 		index = 2
 	}
+	task.stat = 2
+	//create ctx
 	timeOut := task.Timeout
 	if timeOut > 0 {
 		task.ctx, task.cnl = context.WithTimeout(task.ctx, timeOut)
 	}
 	ctx := context.WithValue(task.ctx, ThreadId, threadId) //线程id 值写入ctx
+	task.stat = 3
+	//create params
 	params := make([]reflect.Value, len(task.Args)+index)
 	params[0] = reflect.ValueOf(ctx)
 	if obj.createThreadValue != nil {
@@ -308,13 +339,19 @@ func (obj *Client) run(task *Task, option any, threadId int64) {
 	for k, param := range task.Args {
 		params[k+index] = reflect.ValueOf(param)
 	}
-	task.Result = []any{}
+	//run func
+	task.stat = 4
+	task.result = []any{}
 	for _, rs := range reflect.ValueOf(task.Func).Call(params) { //执行主方法
-		task.Result = append(task.Result, rs.Interface())
+		task.result = append(task.result, rs.Interface())
 	}
+	task.stat = 5
+	//callback
 	if task.CallBack != nil {
-		task.Error = task.CallBack(ctx, task.Result) //执行回调方法
+		task.err = task.CallBack(ctx, task.result) //执行回调方法
 	}
+	//end
+	task.stat = 6
 }
 
 func (obj *Client) JoinClose() error { //等待所有任务完成，并关闭pool
