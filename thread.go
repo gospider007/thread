@@ -154,14 +154,6 @@ func (obj *Client) taskCallBackMain() {
 }
 func (obj *Client) runMain() {
 	defer func() {
-		if err := recover(); err != nil {
-			if obj.err == nil {
-				obj.err = err.(error)
-			}
-			obj.Close()
-		}
-	}()
-	defer func() {
 		select {
 		case obj.threadTokens <- struct{}{}: //通知有一个协程空闲
 		default:
@@ -243,40 +235,34 @@ func (obj *Client) verify(fun any, args []any) error {
 
 // 创建task
 func (obj *Client) Write(task *Task) (*Task, error) {
-	task.ctx, task.cnl = context.WithCancel(obj.ctx2)        //设置任务ctx
-	if err := obj.verify(task.Func, task.Args); err != nil { //验证参数
-		task.err = err
-		task.cnl()
+	task.ctx, task.cnl = context.WithCancel(obj.ctx2) //设置任务ctx
+	err := obj.verify(task.Func, task.Args)
+	defer func() {
+		if err != nil {
+			task.err = err
+			task.cnl()
+		}
+	}()
+	if err != nil { //验证参数
 		return task, err
 	}
 	for {
 		select {
 		case <-obj.ctx2.Done(): //接到线程关闭通知
-			if obj.Err() != nil {
-				task.err = obj.Err()
-			} else {
-				task.err = ErrPoolClosed
+			if err = obj.Err(); err == nil {
+				err = ErrPoolClosed
 			}
-			task.cnl()
-			return task, task.Error()
+			return task, err
 		case <-obj.ctx.Done(): //接到线程关闭通知
-			if obj.Err() != nil {
-				task.err = obj.Err()
-			} else {
-				task.err = ErrPoolClosed
+			if err = obj.Err(); err == nil {
+				err = ErrPoolClosed
 			}
-			task.cnl()
-			return task, task.Error()
+			return task, err
 		case obj.tasks <- task:
 			if obj.tasks2 != nil {
-				if err := obj.tasks2.Add(task); err != nil {
-					if obj.Err() != nil {
-						return task, obj.Err()
-					}
-					return task, err
-				}
+				err = obj.tasks2.Add(task)
 			}
-			return task, nil
+			return task, err
 		case <-obj.threadTokens: //tasks 写不进去，线程池空闲，开启新的协程消费
 			go obj.runMain()
 		}
@@ -299,7 +285,6 @@ func GetThreadId(ctx context.Context) int64 { //获取线程id，获取失败返
 	return 0
 }
 func (obj *Client) run(task *Task, option any, threadId int64) {
-	defer task.cnl() //函数结束，任务完成
 	defer func() {
 		if r := recover(); r != nil {
 			task.err = fmt.Errorf("%v", r)
@@ -307,6 +292,7 @@ func (obj *Client) run(task *Task, option any, threadId int64) {
 				debug.PrintStack()
 			}
 		}
+		task.cnl() //函数结束
 	}()
 	task.stat = 1
 	//start
