@@ -30,7 +30,7 @@ type Client struct {
 	tasks2       *chanx.Client[*Task] //chanx 的队列任务
 	err          error
 	maxThreadId  atomic.Int64
-	maxNum       int64
+	maxNum       int
 
 	runAfterTime *time.Timer
 }
@@ -82,7 +82,7 @@ type ClientOption struct {
 	TaskDoneCallBack  func(*Task) error                         //有序的任务完成回调
 }
 
-func NewClient(preCtx context.Context, maxNum int64, options ...ClientOption) *Client {
+func NewClient(preCtx context.Context, maxNum int, options ...ClientOption) *Client {
 	if preCtx == nil {
 		preCtx = context.TODO()
 	}
@@ -382,8 +382,8 @@ func (obj *Client) Err() error { //错误
 func (obj *Client) Done() <-chan struct{} { //所有任务执行完毕
 	return obj.ctx2.Done()
 }
-func (obj *Client) ThreadSize() int64 { //创建的协程数量
-	return obj.maxNum - int64(len(obj.threadTokens))
+func (obj *Client) ThreadSize() int { //创建的协程数量
+	return obj.maxNum - len(obj.threadTokens)
 }
 func (obj *Client) Empty() bool { //任务是否为空
 	if obj.ThreadSize() <= 0 && len(obj.tasks) == 0 {
