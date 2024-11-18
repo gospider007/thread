@@ -246,27 +246,28 @@ func (obj *Client) Write(task *Task) (*Task, error) {
 	if err != nil { //验证参数
 		return task, err
 	}
+loop:
 	for {
 		select {
 		case <-obj.ctx2.Done(): //接到线程关闭通知
-			if err = obj.Err(); err == nil {
-				err = ErrPoolClosed
-			}
-			return task, err
+			err = ErrPoolClosed
+			break loop
 		case <-obj.ctx.Done(): //接到线程关闭通知
-			if err = obj.Err(); err == nil {
-				err = ErrPoolClosed
-			}
-			return task, err
+			err = ErrPoolClosed
+			break loop
 		case obj.tasks <- task:
 			if obj.tasks2 != nil {
 				err = obj.tasks2.Add(task)
 			}
-			return task, err
+			break loop
 		case <-obj.threadTokens: //tasks 写不进去，线程池空闲，开启新的协程消费
 			go obj.runMain()
 		}
 	}
+	if oeerr := obj.Err(); oeerr != nil {
+		err = oeerr
+	}
+	return task, err
 }
 
 type myInt int64
