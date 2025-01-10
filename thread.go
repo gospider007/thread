@@ -36,15 +36,14 @@ type Client struct {
 }
 
 type Task struct {
-	Func     any                                //运行的函数
-	Args     []any                              //传入的参数
-	CallBack func(context.Context, []any) error //回调函数
-	Timeout  time.Duration                      //超时时间
-	err      error                              //函数错误信息
-	result   []any                              //函数执行的结果
-	ctx      context.Context
-	cnl      context.CancelFunc
-	stat     uint8
+	Func    any           //运行的函数
+	Args    []any         //传入的参数
+	Timeout time.Duration //超时时间
+	err     error         //函数错误信息
+	result  []any         //函数执行的结果
+	ctx     context.Context
+	cnl     context.CancelFunc
+	stat    uint8
 }
 
 func (obj *Task) Result() ([]any, error) {
@@ -153,7 +152,13 @@ func (obj *Client) taskCallBackMain() {
 	}
 }
 func (obj *Client) runMain() {
+	var runVal any
+	var err error
+	threadId := obj.maxThreadId.Add(1) //获取线程id
 	defer func() {
+		if obj.clearThreadValue != nil && runVal != nil { //处理回调
+			obj.clearThreadValue(obj.ctx, runVal)
+		}
 		select {
 		case obj.threadTokens <- struct{}{}: //通知有一个协程空闲
 		default:
@@ -163,17 +168,11 @@ func (obj *Client) runMain() {
 		default:
 		}
 	}()
-	var runVal any
-	var err error
-	threadId := obj.maxThreadId.Add(1) //获取线程id
-	if obj.createThreadValue != nil {  //线程开始回调
+	if obj.createThreadValue != nil { //线程开始回调
 		runVal, err = obj.createThreadValue(obj.ctx, threadId)
 		if err != nil {
 			return
 		}
-	}
-	if obj.clearThreadValue != nil && runVal != nil { //处理回调
-		defer obj.clearThreadValue(obj.ctx, runVal)
 	}
 	for {
 		if obj.runAfterTime == nil {
@@ -331,11 +330,6 @@ func (obj *Client) run(task *Task, option any, threadId int64) {
 	task.result = []any{}
 	for _, rs := range reflect.ValueOf(task.Func).Call(params) { //执行主方法
 		task.result = append(task.result, rs.Interface())
-	}
-	task.stat = 5
-	//callback
-	if task.CallBack != nil {
-		task.err = task.CallBack(ctx, task.result) //执行回调方法
 	}
 	//end
 	task.stat = 6
