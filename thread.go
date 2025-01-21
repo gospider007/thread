@@ -322,15 +322,15 @@ func runMain[T any](ctx context.Context, cnl context.CancelFunc, maxNum int, val
 	}
 	thC.JoinClose()
 }
-func getCtxWithValue[T any](preCtx context.Context, value T, deleteFunc func(ctx context.Context, cnl context.CancelFunc, value T)) (context.Context, context.CancelFunc) {
+func getCtxWithValue[T any](preCtx context.Context, value T, deleteFunc func(ctx context.Context, value T)) (context.Context, context.CancelFunc) {
 	ctx, cnl := context.WithCancel(preCtx)
 	go func() {
 		defer cnl()
-		deleteFunc(ctx, cnl, value)
+		deleteFunc(ctx, value)
 	}()
 	return ctx, cnl
 }
-func NewCallBackClient[T any](preCtx context.Context, maxSize int, createValue func(ctx context.Context) (T, error), deleteFunc func(ctx context.Context, cnl context.CancelFunc, value T), doneFunc func(ctx context.Context, value T)) error {
+func NewCallBackClient[T any](preCtx context.Context, maxSize int, createValue func(ctx context.Context) (T, error), deleteFunc func(ctx context.Context, value T), doneFunc func(ctx context.Context, value T)) error {
 	if preCtx == nil {
 		preCtx = context.TODO()
 	}
