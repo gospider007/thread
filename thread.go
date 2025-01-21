@@ -6,17 +6,14 @@ import (
 	"fmt"
 	"reflect"
 	"runtime/debug"
-	"sync/atomic"
 	"time"
 
 	"github.com/gospider007/chanx"
 )
 
 type Client struct {
-	debug             bool                                      //是否显示调试信息
-	createThreadValue func(context.Context, int64) (any, error) //每一个线程开始时，根据线程id,创建一个局部对象
-	clearThreadValue  func(context.Context, any) error          //线程被消毁时的回调,再这里可以安全的释放局部对象资源
-	taskDoneCallBack  func(*Task) error                         //任务回调
+	debug            bool              //是否显示调试信息
+	taskDoneCallBack func(*Task) error //任务回调
 
 	ctx2         context.Context      //控制各个协程
 	cnl2         context.CancelFunc   //控制各个协程
@@ -29,21 +26,16 @@ type Client struct {
 	dones        chan struct{}        //任务完成通知队列
 	tasks2       *chanx.Client[*Task] //chanx 的队列任务
 	err          error
-	maxThreadId  atomic.Int64
 	maxNum       int
-
-	runAfterTime *time.Timer
 }
 
 type Task struct {
-	Func    any           //运行的函数
-	Args    []any         //传入的参数
-	Timeout time.Duration //超时时间
-	err     error         //函数错误信息
-	result  []any         //函数执行的结果
-	ctx     context.Context
-	cnl     context.CancelFunc
-	stat    uint8
+	Func   any   //运行的函数
+	Args   []any //传入的参数
+	err    error //函数错误信息
+	result []any //函数执行的结果
+	ctx    context.Context
+	cnl    context.CancelFunc
 }
 
 func (obj *Task) Result() ([]any, error) {
@@ -51,23 +43,6 @@ func (obj *Task) Result() ([]any, error) {
 }
 
 func (obj *Task) Error() error {
-	if obj.err != nil || obj.stat == 6 {
-		return obj.err
-	}
-	switch obj.stat {
-	case 0:
-		return errors.New("task init error")
-	case 1:
-		return errors.New("task start error")
-	case 2:
-		return errors.New("task ctx error")
-	case 3:
-		return errors.New("task params error")
-	case 4:
-		return errors.New("task func error")
-	case 5:
-		return errors.New("task callback error")
-	}
 	return obj.err
 }
 func (obj *Task) Done() <-chan struct{} {
@@ -103,10 +78,8 @@ func NewClient(preCtx context.Context, maxNum int, options ...ClientOption) *Cli
 		threadTokens <- struct{}{}
 	}
 	pool := &Client{
-		debug:             option.Debug,             //是否显示调试信息
-		createThreadValue: option.CreateThreadValue, //每一个线程开始时，根据线程id,创建一个局部对象
-		clearThreadValue:  option.ClearThreadValue,  //线程被消毁时的回调,再这里可以安全的释放局部对象资源
-		taskDoneCallBack:  option.TaskDoneCallBack,  //任务回调
+		debug:            option.Debug,            //是否显示调试信息
+		taskDoneCallBack: option.TaskDoneCallBack, //任务回调
 
 		maxNum:       maxNum,
 		ctx2:         ctx2,
@@ -152,13 +125,7 @@ func (obj *Client) taskCallBackMain() {
 	}
 }
 func (obj *Client) runMain() {
-	var runVal any
-	var err error
-	threadId := obj.maxThreadId.Add(1) //获取线程id
 	defer func() {
-		if obj.clearThreadValue != nil && runVal != nil { //处理回调
-			obj.clearThreadValue(obj.ctx, runVal)
-		}
 		select {
 		case obj.threadTokens <- struct{}{}: //通知有一个协程空闲
 		default:
@@ -168,33 +135,32 @@ func (obj *Client) runMain() {
 		default:
 		}
 	}()
-	if obj.createThreadValue != nil { //线程开始回调
-		runVal, err = obj.createThreadValue(obj.ctx, threadId)
-		if err != nil {
-			return
-		}
-	}
 	for {
-		if obj.runAfterTime == nil {
-			obj.runAfterTime = time.NewTimer(time.Second * 30)
-		} else {
-			obj.runAfterTime.Reset(time.Second * 30)
-		}
 		select {
 		case <-obj.ctx2.Done(): //通知线程关闭
 			return
+		case task := <-obj.tasks: //接收任务
+			go obj.run(task) //运行任务
+			select {
+			case <-obj.ctx2.Done():
+				task.cnl()
+				return
+			case <-task.Done(): //任务完成
+			}
 		case <-obj.ctx.Done(): //通知完成任务后关闭
 			select {
-			case <-obj.ctx2.Done(): //通知线程关闭
-				return
 			case task := <-obj.tasks: //接收任务
-				obj.run(task, runVal, threadId) //运行任务
+				go obj.run(task) //运行任务
+				select {
+				case <-obj.ctx2.Done(): //通知线程关闭
+					task.cnl()
+					return
+				case <-task.Done(): //任务完成
+				}
 			default: //没有任务关闭线程
 				return
 			}
-		case task := <-obj.tasks: //接收任务
-			obj.run(task, runVal, threadId)
-		case <-obj.runAfterTime.C: //等待线程超时
+		case <-time.After(time.Second * 30): //等待线程超时
 			return
 		}
 	}
@@ -208,9 +174,6 @@ func (obj *Client) verify(fun any, args []any) error {
 	}
 	typeOfFun := reflect.TypeOf(fun)
 	index := 1
-	if obj.createThreadValue != nil {
-		index = 2
-	}
 	if typeOfFun.Kind() != reflect.Func {
 		return errors.New("not func")
 	}
@@ -233,8 +196,11 @@ func (obj *Client) verify(fun any, args []any) error {
 }
 
 // 创建task
-func (obj *Client) Write(task *Task) (*Task, error) {
-	task.ctx, task.cnl = context.WithCancel(obj.ctx2) //设置任务ctx
+func (obj *Client) Write(ctx context.Context, task *Task) (*Task, error) {
+	if ctx != nil {
+		ctx = obj.ctx2
+	}
+	task.ctx, task.cnl = context.WithCancel(ctx) //设置任务ctx
 	err := obj.verify(task.Func, task.Args)
 	defer func() {
 		if err != nil {
@@ -245,46 +211,33 @@ func (obj *Client) Write(task *Task) (*Task, error) {
 	if err != nil { //验证参数
 		return task, err
 	}
-loop:
 	for {
 		select {
 		case <-obj.ctx2.Done(): //接到线程关闭通知
-			err = ErrPoolClosed
-			break loop
+			if oeerr := obj.Err(); oeerr != nil {
+				return task, oeerr
+			}
+			return task, ErrPoolClosed
 		case <-obj.ctx.Done(): //接到线程关闭通知
-			err = ErrPoolClosed
-			break loop
+			if oeerr := obj.Err(); oeerr != nil {
+				return task, oeerr
+			}
+			return task, ErrPoolClosed
 		case obj.tasks <- task:
 			if obj.tasks2 != nil {
 				err = obj.tasks2.Add(task)
 			}
-			break loop
+			if oeerr := obj.Err(); oeerr != nil {
+				return task, oeerr
+			}
+			return task, err
 		case <-obj.threadTokens: //tasks 写不进去，线程池空闲，开启新的协程消费
 			go obj.runMain()
 		}
 	}
-	if oeerr := obj.Err(); oeerr != nil {
-		err = oeerr
-	}
-	return task, err
 }
 
-type myInt int64
-
-var ThreadId myInt = 0
-
-func GetThreadId(ctx context.Context) int64 { //获取线程id，获取失败返回0
-	if ctx == nil {
-		return 0
-	}
-	if val := ctx.Value(ThreadId); val != nil {
-		if v, ok := val.(int64); ok {
-			return v
-		}
-	}
-	return 0
-}
-func (obj *Client) run(task *Task, option any, threadId int64) {
+func (obj *Client) run(task *Task) {
 	defer func() {
 		if r := recover(); r != nil {
 			task.err = fmt.Errorf("%v", r)
@@ -294,51 +247,22 @@ func (obj *Client) run(task *Task, option any, threadId int64) {
 		}
 		task.cnl() //函数结束
 	}()
-	task.stat = 1
 	//start
-	index := 1
-	if obj.createThreadValue != nil {
-		if option == nil {
-			task.err = errors.New("thread value is nil")
-			return
-		}
-		if reflect.TypeOf(option).String() != reflect.TypeOf(task.Func).In(1).String() {
-			task.err = fmt.Errorf("第二个参数类型不对: %T", option)
-			return
-		}
-		index = 2
-	}
-	task.stat = 2
-	//create ctx
-	timeOut := task.Timeout
-	if timeOut > 0 {
-		task.ctx, task.cnl = context.WithTimeout(task.ctx, timeOut)
-	}
-	ctx := context.WithValue(task.ctx, ThreadId, threadId) //线程id 值写入ctx
-	task.stat = 3
 	//create params
-	params := make([]reflect.Value, len(task.Args)+index)
-	params[0] = reflect.ValueOf(ctx)
-	if obj.createThreadValue != nil {
-		params[1] = reflect.ValueOf(option)
-	}
+	params := make([]reflect.Value, len(task.Args)+1)
+	params[0] = reflect.ValueOf(task.ctx)
 	for k, param := range task.Args {
-		params[k+index] = reflect.ValueOf(param)
+		params[k+1] = reflect.ValueOf(param)
 	}
 	//run func
-	task.stat = 4
 	task.result = []any{}
 	for _, rs := range reflect.ValueOf(task.Func).Call(params) { //执行主方法
 		task.result = append(task.result, rs.Interface())
 	}
 	//end
-	task.stat = 6
 }
 
 func (obj *Client) JoinClose() error { //等待所有任务完成，并关闭pool
-	if obj.runAfterTime != nil {
-		defer obj.runAfterTime.Stop()
-	}
 	obj.cnl()
 	if obj.tasks2 != nil {
 		obj.tasks2.JoinClose()
@@ -362,9 +286,6 @@ func (obj *Client) JoinClose() error { //等待所有任务完成，并关闭poo
 }
 
 func (obj *Client) Close() { //告诉所有协程，立即结束任务
-	if obj.runAfterTime != nil {
-		defer obj.runAfterTime.Stop()
-	}
 	obj.cnl()
 	if obj.tasks2 != nil {
 		obj.tasks2.Close()
@@ -385,4 +306,40 @@ func (obj *Client) Empty() bool { //任务是否为空
 		return true
 	}
 	return false
+}
+
+func runMain[T any](ctx context.Context, cnl context.CancelFunc, maxNum int, value T, doneFunc func(ctx context.Context, value T)) {
+	defer cnl()
+	thC := NewClient(ctx, maxNum)
+	for range maxNum {
+		_, err := thC.Write(ctx, &Task{
+			Func: doneFunc,
+			Args: []any{value},
+		})
+		if err != nil {
+			return
+		}
+	}
+	thC.JoinClose()
+}
+func getCtxWithValue[T any](preCtx context.Context, value T, deleteFunc func(ctx context.Context, cnl context.CancelFunc, value T)) (context.Context, context.CancelFunc) {
+	ctx, cnl := context.WithCancel(preCtx)
+	go func() {
+		defer cnl()
+		deleteFunc(ctx, cnl, value)
+	}()
+	return ctx, cnl
+}
+func NewCallBackClient[T any](preCtx context.Context, maxSize int, createValue func(ctx context.Context) (T, error), deleteFunc func(ctx context.Context, cnl context.CancelFunc, value T), doneFunc func(ctx context.Context, value T)) error {
+	if preCtx == nil {
+		preCtx = context.TODO()
+	}
+	for {
+		value, err := createValue(preCtx)
+		if err != nil {
+			return err
+		}
+		ctx, cnl := getCtxWithValue(preCtx, value, deleteFunc)
+		go runMain(ctx, cnl, maxSize, value, doneFunc)
+	}
 }
