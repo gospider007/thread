@@ -197,7 +197,7 @@ func (obj *Client) verify(fun any, args []any) error {
 
 // 创建task
 func (obj *Client) Write(ctx context.Context, task *Task) (*Task, error) {
-	if ctx != nil {
+	if ctx == nil {
 		ctx = obj.ctx2
 	}
 	task.ctx, task.cnl = context.WithCancel(ctx) //设置任务ctx
