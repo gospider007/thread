@@ -185,9 +185,10 @@ func (obj *Client) verify(fun any, args []any) error {
 	}
 	for i := index; i < len(args)+index; i++ {
 		if args[i-index] == nil {
-			if reflect.Zero(typeOfFun.In(i)).Interface() != args[i-index] {
+			if typeOfFun.In(i).Kind() != reflect.Ptr {
 				return errors.New("args type not equel")
 			}
+			args[i-index] = reflect.Zero(typeOfFun.In(i)).Interface()
 		} else if !reflect.TypeOf(args[i-index]).ConvertibleTo(typeOfFun.In(i)) {
 			return errors.New("args type not equel")
 		}
