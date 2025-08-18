@@ -292,6 +292,7 @@ func (obj *Client) Close() { //告诉所有协程，立即结束任务
 		obj.tasks2.Close()
 	}
 	obj.cnl2()
+	obj.cnl3()
 }
 func (obj *Client) Err() error { //错误
 	return obj.err
