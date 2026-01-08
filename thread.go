@@ -38,13 +38,25 @@ type Task struct {
 	cnl    context.CancelFunc
 }
 
-func (obj *Task) Result() ([]any, error) {
-	return obj.result, obj.Error()
+func (obj *Task) Result(i ...int) ([]any, error) {
+	if obj.err != nil {
+		return nil, obj.err
+	}
+	if len(i) > 0 {
+		if len(obj.result) <= i[0] {
+			return nil, fmt.Errorf("task result index error")
+		}
+		if obj.result[i[0]] != nil {
+			err, ok := obj.result[i[0]].(error)
+			if !ok {
+				return nil, errors.New("task result not found error")
+			}
+			return nil, err
+		}
+	}
+	return obj.result, obj.err
 }
 
-func (obj *Task) Error() error {
-	return obj.err
-}
 func (obj *Task) Done() <-chan struct{} {
 	return obj.ctx.Done()
 }
@@ -108,8 +120,8 @@ func (obj *Client) taskCallBackMain() {
 			case <-obj.ctx2.Done(): //接到关闭线程通知
 				return
 			case <-task.Done():
-				if task.Error() != nil { //任务报错，线程报错
-					obj.err = task.Error()
+				if _, err := task.Result(); err != nil { //任务报错，线程报错
+					obj.err = err
 					return
 				}
 				if err := obj.taskDoneCallBack(task); err != nil { //任务回调报错，关闭线程
