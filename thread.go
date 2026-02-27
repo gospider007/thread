@@ -147,7 +147,11 @@ func (obj *Client) runMain() {
 		default:
 		}
 	}()
+	interval := time.Second * 30
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for {
+		timer.Reset(interval)
 		select {
 		case <-obj.ctx2.Done(): //通知线程关闭
 			return
@@ -172,7 +176,7 @@ func (obj *Client) runMain() {
 			default: //没有任务关闭线程
 				return
 			}
-		case <-time.After(time.Second * 30): //等待线程超时
+		case <-timer.C: //等待线程超时
 			return
 		}
 	}
